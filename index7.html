@@ -63,28 +63,26 @@
 
   <script>
     // ============================================================
-    //  Configuración del repo (sin depender de dónde se abra el HTML)
+    //  Configuración del repo basada en tu captura
     // ============================================================
-    const REPO_USER   = "derekonsio1023-gif";
-    const REPO_NAME   = "Ultron-buildnow-gg";
-    const REPO_BRANCH = "main";  // <--- cámbialo si tu rama es otra
+    const REPO_USER     = "derekonsio1023-gif";
+    const REPO_NAME     = "Ultron-buildnow-gg";
+    const REPO_BRANCH   = "main";
+    const REPO_SUBFOLDER = "buildnow-gg/"; // <-- LA CARPETA QUE FALTABA
 
-    // Usa SIEMPRE el mismo origen desde el que se sirve el HTML
-    // (funciona igual con raw.githack.com y rawcdn.githack.com)
-    const REPO_BASE = `${window.location.origin}/${REPO_USER}/${REPO_NAME}/${REPO_BRANCH}/`;
+    // Construimos la ruta absoluta usando el mismo origen (raw.githack o rawcdn)
+    const REPO_BASE = `${window.location.origin}/${REPO_USER}/${REPO_NAME}/${REPO_BRANCH}/${REPO_SUBFOLDER}`;
     const BUILD_BASE = REPO_BASE + "Build/";
     const STREAMING_ASSETS_BASE = REPO_BASE + "StreamingAssets";
 
-    console.log("[boot] REPO_BASE =", REPO_BASE);
     console.log("[boot] BUILD_BASE =", BUILD_BASE);
 
-    // Archivos partidos en el repo como .part1, .part2, ...
+    // Archivos que están partidos (.part1, .part2, etc.)
     const SPLIT_MAP = {
       "7db022abd161455e3cc5f207e75d294b.wasm": null,
       "ab8dd356a41a2943639294657a0990f8.data": null
     };
 
-    // UI helpers
     const ui = {
       text: () => document.getElementById("loading-text"),
       fill: () => document.getElementById("progress-fill"),
@@ -95,10 +93,6 @@
       if (pct !== undefined) ui.fill().style.width = `${pct}%`;
     }
 
-    // ============================================================
-    //  Une .part1 + .part2 + ... en un Blob.
-    //  Usa solo GET (evita problemas con HEAD en CDNs).
-    // ============================================================
     async function mergeParts(baseUrl) {
       const buffers = [];
       for (let i = 1; i <= 99; i++) {
@@ -142,27 +136,20 @@
       return map;
     }
 
-    // ============================================================
-    //  Arranque
-    // ============================================================
     (async () => {
       try {
-        // Chequeo previo: ¿existe el loader en esa URL? Si no, error claro.
+        // Chequeo previo del loader
         try {
-          const probe = await fetch(BUILD_BASE + "7a2dbded24d57e056180125b1583e7c4.loader.js",
-                                    { method: "GET" });
+          const probe = await fetch(BUILD_BASE + "7a2dbded24d57e056180125b1583e7c4.loader.js");
           if (!probe.ok) {
-            setStatus(`404 en loader.js — revisa rama "${REPO_BRANCH}" y carpeta Build/`, 0);
+            setStatus(`404 en loader.js — revisa la ruta`, 0);
             console.error("[boot] loader.js status:", probe.status, BUILD_BASE + "7a2...loader.js");
             return;
           }
-        } catch (e) {
-          console.warn("[boot] no pude probar loader.js:", e);
-        }
+        } catch (e) {}
 
         const mergedMap = await preMergeAll();
 
-        // Interceptamos fetch solo para los archivos partidos.
         const origFetch = window.fetch.bind(window);
         window.fetch = function(resource, options) {
           try {
@@ -200,7 +187,7 @@
         script.src = loaderUrl;
         script.onerror = () => {
           console.error("[loader] fallo al cargar", loaderUrl);
-          setStatus("Error cargando loader.js — mira la consola", 0);
+          setStatus("Error cargando loader.js", 0);
         };
         script.onload = () => {
           createUnityInstance(canvas, config, (progress) => {
@@ -211,7 +198,7 @@
             ui.screen().style.display = "none";
           }).catch((err) => {
             console.error("[unity] createUnityInstance falló:", err);
-            setStatus("Error al iniciar el juego (mira la consola)", 0);
+            setStatus("Error al iniciar el juego", 0);
           });
         };
         document.body.appendChild(script);
