@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <style>
+    body, html {
+      margin: 0 !important; padding: 0 !important;
+      background-color: #0b0b0e !important;
+      overflow: hidden !important;
+      width: 100%; height: 100%;
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+    #loading-screen {
+      position: absolute; inset: 0;
+      background: radial-gradient(circle, #1a1a24 0%, #08080c 100%);
+      display: flex; flex-direction: column;
+      justify-content: center; align-items: center;
+      z-index: 10;
+    }
+    .loading-container { width: 320px; text-align: center; }
+    .game-title {
+      color: #fff; font-size: 32px; font-weight: 800;
+      letter-spacing: 4px; margin-bottom: 8px;
+      text-transform: uppercase;
+      text-shadow: 0 0 20px rgba(255,255,255,0.2);
+    }
+    .loading-status {
+      color: #8a8a98; font-size: 14px; font-weight: 500;
+      letter-spacing: 2px; margin-bottom: 24px;
+      text-transform: uppercase;
+    }
+    .progress-bar-bg {
+      width: 100%; height: 6px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 10px; overflow: hidden;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+    }
+    .progress-bar-fill {
+      width: 0%; height: 100%;
+      background: linear-gradient(90deg, #ff416c, #ff4b2b);
+      box-shadow: 0 0 15px #ff4b2b;
+      border-radius: 10px;
+      transition: width 0.3s ease-out;
+    }
+    #unity-canvas {
+      position: fixed !important; top: 0 !important; left: 0 !important;
+      width: 100% !important; height: 100% !important;
+      outline: none; background: #000;
+    }
+  </style>
+</head>
+<body class="noselect">
+
+  <div id="loading-screen">
+    <div class="loading-container">
+      <div class="game-title">BuildNow GG</div>
+      <div class="loading-status" id="loading-text">Connecting... 0%</div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
+    </div>
+  </div>
+
+  <canvas id="unity-canvas"></canvas>
+
+  <script>
+    // ============================================================
+    //  RUTAS RELATIVAS AL index.html
+    //  Estructura asumida:
+    //    /Build/...
+    //    /StreamingAssets/...   (si existe)
+    //    /buildnow-gg/index.html   <-- este archivo
+    // ============================================================
+    const BUILD_BASE = "../Build/";
+    const STREAMING_ASSETS_BASE = "../StreamingAssets";
+
+    // Archivos que están partidos en el repo como .part1, .part2, ...
+    const SPLIT_MAP = {
+      "7db022abd161455e3cc5f207e75d294b.wasm": null,
+      "ab8dd356a41a2943639294657a0990f8.data": null
+    };
+
+    // Helpers de UI
+    const ui = {
+      text: () => document.getElementById("loading-text"),
+      fill: () => document.getElementById("progress-fill"),
+      screen: () => document.getElementById("loading-screen"),
+    };
+    function setStatus(msg, pct) {
+      if (msg !== undefined) ui.text().innerText = msg;
+      if (pct !== undefined) ui.fill().style.width = `${pct}%`;
+    }
+
+    // ============================================================
+    //  Une .part1 + .part2 + ... en un Blob.
+    //  Si no existe ningún .part1, devuelve la URL original.
+    //  Usa SOLO GET (nada de HEAD) para evitar problemas en CDNs.
+    // ============================================================
+    async function mergeParts(baseUrl) {
+      const buffers = [];
+      for (let i = 1; i <= 99; i++) {
+        const url = baseUrl + ".part" + i;
+        let res;
+        try {
+          res = await fetch(url);
+        } catch (e) {
+          console.warn("[mergeParts] fetch falló en", url, e);
+          break;
+        }
+        if (!res.ok) {
+          console.log("[mergeParts] no hay más partes en", url, "(status", res.status + ")");
+          break;
+        }
+        buffers.push(new Uint8Array(await res.arrayBuffer()));
+      }
+      if (buffers.length === 0) return baseUrl;
+
+      console.log(`[mergeParts] uniendo ${buffers.length} partes de`, baseUrl);
+      const total = buffers.reduce((a, b) => a + b.length, 0);
+      const merged = new Uint8Array(total);
+      let offset = 0;
+      for (const b of buffers) { merged.set(b, offset); offset += b.length; }
+      return URL.createObjectURL(new Blob([merged]));
+    }
+
+    async function preMergeAll() {
+      const map = {};
+      const entries = Object.keys(SPLIT_MAP);
+      const total = entries.length;
+      let done = 0;
+
+      for (const file of entries) {
+        const pct = Math.floor((done / total) * 100);
+        setStatus(`Loading ${file.slice(0, 8)}... ${pct}%`, pct);
+        map[file] = await mergeParts(BUILD_BASE + file);
+        done++;
+        setStatus(`Loading Assets... ${Math.floor((done/total)*100)}%`,
+                  Math.floor((done/total)*100));
+      }
+      return map;
+    }
+
+    // ============================================================
+    //  Arranque
+    // ============================================================
+    (async () => {
+      try {
+        const mergedMap = await preMergeAll();
+
+        // Interceptamos fetch SOLO para los archivos partidos.
+        // Para blob: URLs no pasamos options salvo signal (por si Unity aborta).
+        const origFetch = window.fetch.bind(window);
+        window.fetch = function(resource, options) {
+          try {
+            if (typeof resource === "string") {
+              const key = resource.split("/").pop().split("?")[0];
+              if (mergedMap[key]) {
+                const opts = options && options.signal ? { signal: options.signal } : undefined;
+                return origFetch(mergedMap[key], opts);
+              }
+            }
+          } catch (_) {}
+          return origFetch(resource, options);
+        };
+
+        const canvas = document.querySelector("#unity-canvas");
+        canvas.addEventListener("mousedown", () => {
+          const fn = canvas.requestPointerLock || canvas.mozRequestPointerLock;
+          if (fn) fn.call(canvas);
+        });
+
+        const loaderUrl = BUILD_BASE + "7a2dbded24d57e056180125b1583e7c4.loader.js";
+        const config = {
+          dataUrl:      BUILD_BASE + "ab8dd356a41a2943639294657a0990f8.data",
+          frameworkUrl: BUILD_BASE + "91a2bfcec140bc524100478b99a4f6d7.framework.js",
+          codeUrl:      BUILD_BASE + "7db022abd161455e3cc5f207e75d294b.wasm",
+          streamingAssetsUrl: STREAMING_ASSETS_BASE,
+          companyName: "BuildNow GG",
+          productName: "BuildNow GG",
+          productVersion: "1.0.0"
+        };
+
+        setStatus("Loading engine...", 100);
+
+        const script = document.createElement("script");
+        script.src = loaderUrl;
+        script.onerror = () => {
+          console.error("[loader] fallo al cargar", loaderUrl);
+          setStatus("Error cargando loader.js — revisa la ruta/rama", 0);
+        };
+        script.onload = () => {
+          createUnityInstance(canvas, config, (progress) => {
+            const pct = Math.floor(progress * 100);
+            setStatus(`Launching... ${pct}%`, pct);
+          }).then((unityInstance) => {
+            window.gameInstance = unityInstance;
+            ui.screen().style.display = "none";
+          }).catch((err) => {
+            console.error("[unity] createUnityInstance falló:", err);
+            setStatus("Error al iniciar el juego (mira la consola)", 0);
+          });
+        };
+        document.body.appendChild(script);
+      } catch (err) {
+        console.error("[boot] error fatal:", err);
+        setStatus("Error fatal al cargar", 0);
+      }
+    })();
+
+    function resizeCanvas() {
+      const canvas = document.getElementById("unity-canvas");
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener("resize", resizeCanvas);
+    resizeCanvas();
+  </script>
+</body>
+</html>
